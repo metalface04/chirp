@@ -27,7 +27,7 @@ app.post('/voice', (req, res) => {
     // 3. Pause the main call thread to keep the call alive.
     // The stream, running in the background, will continue for this duration.
     twiml.pause({
-        length: 14  // 4 hours
+        length: 10 // 10 seconds
     });
 
     // Send the complete TwiML to Twilio
