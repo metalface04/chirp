@@ -2,16 +2,15 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const twilio = require('twilio');
-const fs = require('fs');
-const ffmpeg = require('fluent-ffmpeg');
+const { SarvamAI, SarvamAIClient } = require("sarvamai");
 
-const app = express();
+const app = express(); // express webapp for handling requests and responses
 const port = 3000;
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 app.post('/voice', (req, res) => {
-    const ngrokUrl = '3ce393ff95f9.ngrok-free.app'; // Replace this
+    const ngrokUrl = '3ce393ff95f9.ngrok-free.app'; // Replace this with new url everytime we start ngrok
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.say('The output is on Chirags laptop');
     // 1. Initiate the connection and start the stream.
@@ -35,37 +34,57 @@ app.post('/voice', (req, res) => {
     res.send(twiml.toString());
 });
 
-wss.on('connection', (ws) => {
-    console.log('WebSocket connection established!');
-    
-    const rawAudioFile = 'output.raw';
-    const writeStream = fs.createWriteStream(rawAudioFile);
+wss.on('connection', async (ws) => {
+    console.log('WebSocket connection established with Twilio!');
 
-    ws.on('message', (message) => {
-        const msg = JSON.parse(message);
-        if (msg.event === 'media') {
-            const audioChunk = Buffer.from(msg.media.payload, 'base64');
-            writeStream.write(audioChunk);
+    // Init SarvamAI client
+    const client = new SarvamAIClient({
+        apiSubscriptionKey: process.env.SARVAM_API_KEY
+    });
+    const sarvamSocket = await client.speechToTextStreaming.connect({
+        "language-code": "en-IN",  // Change to kn-IN or others as needed
+        "model": "saarika:v2.5",
+        "high-vad-sensitivity": true
+    });
+
+    // Wait for Sarvam socket to open
+    await sarvamSocket.waitForOpen();
+    console.log("Sarvam.ai WebSocket is ready.");
+
+    sarvamSocket.on("message", (message) => {
+        console.log("📝 Transcription:", message);
+    });
+
+    sarvamSocket.on("error", (err) => {
+        console.error("Sarvam.ai socket error:", err);
+    });
+
+    sarvamSocket.on("close", () => {
+        console.log("Sarvam.ai connection closed.");
+    });
+
+    ws.on('message', async (message) => {
+        try {
+            const msg = JSON.parse(message);
+            if (msg.event === 'media') {
+                const audioChunk = Buffer.from(msg.media.payload, 'base64');
+                
+                const audioData = {
+                    data: audioChunk.toString('base64'),  // required to be base64-encoded
+                    sample_rate: 8000,  // Twilio streams at 8000 Hz
+                    encoding: "audio/mulaw"
+                };
+
+                sarvamSocket.transcribe({ audio: audioData });
+            }
+        } catch (err) {
+            console.error("Error processing audio message:", err);
         }
     });
 
     ws.on('close', () => {
-        console.log('WebSocket connection closed. Finalizing audio file...');
-        writeStream.end();
-
-        ffmpeg()
-            .input(rawAudioFile)
-            .inputFormat('mulaw')
-            .inputOptions(['-ar 8000', '-ac 1'])
-            .output('output.wav')
-            .on('end', () => {
-                console.log('Conversion to WAV finished!');
-                fs.unlinkSync(rawAudioFile);
-            })
-            .on('error', (err) => {
-                console.error('Error during conversion:', err.message);
-            })
-            .run();
+        console.log('Twilio WebSocket closed.');
+        sarvamSocket.close();
     });
 });
 
